@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>スマートフォン姿勢判定＋YouTube音あり再生</title>
+  <style>
+    :root { --w: 240px; --h: 320px; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Apple Color Emoji", "Segoe UI Emoji";
+      font-size: 18px;
+      margin: 0;
+      color: #111;
+      background: #fafafa;
+    }
+    header {
+      padding: 12px 16px;
+      background: #fff;
+      border-bottom: 1px solid #eee;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    h1 { font-size: 20px; margin: 0; }
+    main {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      padding: 12px;
+      place-items: center;
+    }
+    .stage {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+    }
+    .pair {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+      flex-direction: row;
+    }
+    video, canvas {
+      transform: scaleX(-1);
+      width: var(--w);
+      height: var(--h);
+      border: 1px solid #ddd;
+      background: #000;
+      border-radius: 6px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+    }
+    button {
+      font-size: 15px;
+      padding: 8px 14px;
+      border-radius: 10px;
+      border: 1px solid #ccc;
+      background: #fff;
+      cursor: pointer;
+    }
+    button.primary {
+      background: #0ea5e9;
+      color: #fff;
+      border-color: #0ea5e9;
+    }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .panel {
+      width: min(680px, 92vw);
+      background: #fff;
+      border: 1px solid #eee;
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-line;
+    }
+    #warning {
+      font-size: 24px;
+      font-weight: 800;
+      text-align: center;
+      margin: 4px 0 0;
+    }
+    .ok { color: #16a34a; }
+    .bad { color: #dc2626; }
+    .hint { color: #666; font-size: 13px; }
+    .badge {
+      display:inline-block;
+      padding:2px 8px;
+      border-radius:999px;
+      background:#f1f5f9;
+      font-size:12px;
+    }
+    @media (max-width: 760px) {
+      .pair { flex-direction: column; flex-wrap: nowrap; }
+    }
+    #canvas { display: none; }
+
+    /* ▼ YouTube用スタイル ▼ */
+    input[type="url"] {
+      width: min(400px, 90vw);
+      padding: 8px;
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+    .yt-controls {
+      margin-top: 8px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    iframe {
+      width: 100%;
+      max-width: 640px;
+      aspect-ratio: 16/9;
+      border: none;
+      border-radius: 8px;
+      background: #000;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>スマートフォン姿勢判定 <span class="badge">3</span></h1>
+  </header>
+
+  <main>
+    <!-- 姿勢判定ステージ -->
+    <section class="stage">
+      <div class="controls">
+        <button id="startBtn" class="primary">測定開始</button>
+        <button id="calibBtn" disabled>正しい姿勢の基準</button>
+        <button id="resetBtn" disabled>解除</button>
+      </div>
+      <div class="pair">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="canvas"></canvas>
+      </div>
+    </section>
+
+    <!-- 姿勢判定・ログパネル -->
+    <section class="panel">
+      <div id="warning" class="ok">測定待機中</div>
+      <div class="row">
+        <div>
+          <h3>現在値</h3>
+          <div id="output" class="mono">読み取り中...</div>
+        </div>
+      </div>
+      <p class="hint">
+        使い方：<strong>測定開始</strong> → 良い姿勢で <strong>基準ボタン</strong> を押し、メッセージに従って3秒静止 →<br>
+        キャリブを押さない場合も、開始直後の顔向きを基準にして判定します。<br>
+        不要なら <strong>解除</strong>。iOS は開始時にセンサー許可が必要です。
+      </p>
+
+      <!-- ▼ ログ操作UI ▼ -->
+      <div class="controls" style="margin-top:6px">
+        <button id="logStartBtn">ログ開始</button>
+        <button id="logStopBtn" disabled>ログ停止</button>
+        <button id="exportCsvBtn">CSVエクスポート</button>
+        <button id="clearLogBtn">ログ全削除</button>
+      </div>
+      <!-- ▲ ログ操作UI ▲ -->
+    </section>
+
+    <!-- ▼ YouTube 音あり再生パネル ▼ -->
+    <section class="panel">
+      <h3>YouTube音あり再生テスト</h3>
+      <div class="yt-controls">
+        <input id="ytUrl" type="url" placeholder="YouTubeのURLを貼り付け">
+        <button id="loadYtBtn">読み込み</button>
+      </div>
+      <iframe id="ytPlayer"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowfullscreen></iframe>
+      <p class="hint">
+        🔊 「読み込み」ボタンを押すと音付きで自動再生を試みます。<br>
+        iPhoneやSafariでは自動再生が無音または停止する場合があります。<br>
+        その場合はプレイヤーの ▶ ボタンを押すと音が出ます。
+      </p>
+    </section>
+    <!-- ▲ YouTube 音あり再生パネル ▲ -->
+  </main>
+
+  <!-- MediaPipe -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <script>
+    // ========== 設定/状態 ==========
+    const PARAMS = {
+      alphaPitch: 0.25, alphaRoll: 0.25, alphaYdiff: 0.3, alphaNoseZ: 0.25,
+      calibYdiff: null, calibNoseZ: null,
+      // しきい値
+      absExitBand: 0.02,
+      closeEnter: -0.035, closeExit: -0.015, farEnter: 0.020, farExit: 0.005,
+      absCloseEnter: -0.15, absFarEnter: -0.10, absZExitBand: 0.02,
+      sustainMs: 10, clearMs: 10,
+      // 警告音
+      beep: { intervalMs: 500, freq: 880, dur: 0.3, gain: 0.08 },
+    };
+
+    const video  = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx    = canvas.getContext('2d');
+    const output = document.getElementById('output');
+    const warning= document.getElementById('warning');
+    const startBtn = document.getElementById('startBtn');
+    const calibBtn = document.getElementById('calibBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    let rawPitch=0, rawRoll=0;
+    let sPitch=0, sRoll=0, sYdiff=null, sNoseZ=null;
+    let faceState = { dir: 'straight', prox: '通常距離' };
+    let bentState = false;
+    let enterStart = null, exitStart  = null;
+    let wasDown = false, wasUp = false, wasClose = false, wasFar = false;
+
+    // ★ 3秒キャリブレーション状態
+    let calibMode = false;
+    let calibSamples = [];
+    let calibStartTs = 0;
+
+    // UI最適化
+    let lastWarnText = null, lastWarnBad = null;
+    let camera = null;
+    let lastInferenceTs = 0; // FPS制限
+
+    // 顔検出フラグ
+    let faceDetected = false;
+
+    // ★ 自動基準用（キャリブ押していない＆保存基準もない時に使う）
+    let autoBaseY = null, autoBaseZ = null;
+    let autoBaseCount = 0;
+    let autoBaseDone  = false;
+
+    // ======== 警告音（Web Audio） ========
+    let audioCtx = null;
+    let beepInterval = null;
+
+    function ensureAudio() {
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume?.();
+        }
+      } catch (e) {
+        console.warn('AudioContext 初期化に失敗:', e);
+        audioCtx = null;
+      }
+    }
+
+    function playBeep() {
+      if (!audioCtx) return;
+      const { freq, dur, gain } = PARAMS.beep;
+      const osc = audioCtx.createOscillator();
+      const g   = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      g.gain.setValueAtTime(gain, audioCtx.currentTime);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + dur);
+      osc.onended = () => { try { osc.disconnect(); g.disconnect(); } catch {} };
+    }
+
+    function startBeepLoop() {
+      if (beepInterval) return;
+      playBeep(); // 入りで1回
+      beepInterval = setInterval(playBeep, PARAMS.beep.intervalMs);
+    }
+
+    function stopBeepLoop() {
+      if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+    }
+
+    // ========== センサー ==========
+    function handleOrientation(e){
+      rawPitch = (e.beta  ?? 0);
+      rawRoll  = (e.gamma ?? 0);
+      sPitch = PARAMS.alphaPitch * rawPitch + (1 - PARAMS.alphaPitch) * sPitch;
+      sRoll  = PARAMS.alphaRoll  * rawRoll  + (1 - PARAMS.alphaRoll ) * sRoll;
+    }
+
+    // ========== FaceMesh ==========
+    const faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
+    faceMesh.onResults(results => {
+      // FPS制限（10fps）
+      const now = performance.now();
+      if (now - lastInferenceTs < 100) return;
+      lastInferenceTs = now;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+        faceDetected = false;
+        setWarning(true, '顔が検出できません');
+        output.textContent = '顔が見つかりません';
+        return;
+      }
+      faceDetected = true;
+
+      const lm = results.multiFaceLandmarks[0];
+      const nose = lm[1];
+      const chin = lm[152];
+
+      drawPoint(nose, '#22c55e');
+      drawPoint(chin, '#2563eb');
+
+      const yDiff = (chin.y - nose.y);
+      const noseZ = nose.z;
+
+      sYdiff = (sYdiff == null) ? yDiff : PARAMS.alphaYdiff * yDiff + (1 - PARAMS.alphaYdiff) * sYdiff;
+      sNoseZ = (sNoseZ == null) ? noseZ : PARAMS.alphaNoseZ * noseZ + (1 - PARAMS.alphaNoseZ) * sNoseZ;
+
+      // ★ 3秒キャリブモード中：サンプルを蓄積
+      if (calibMode) {
+        calibSamples.push({ y: sYdiff, z: sNoseZ });
+
+        if (now - calibStartTs >= 3000) {
+          calibMode = false;
+          if (calibSamples.length > 0) {
+            const sum = calibSamples.reduce((acc, v) => {
+              acc.y += v.y;
+              acc.z += v.z;
+              return acc;
+            }, { y: 0, z: 0 });
+            const n = calibSamples.length;
+            PARAMS.calibYdiff = sum.y / n;
+            PARAMS.calibNoseZ = sum.z / n;
+            saveCalibration(PARAMS.calibYdiff, PARAMS.calibNoseZ);
+
+            // 手動キャリブしたら自動基準は不要
+            autoBaseDone = true;
+            autoBaseY = autoBaseZ = null;
+            autoBaseCount = 0;
+
+            setWarning(false, 'ニュートラルを登録しました');
+          } else {
+            setWarning(true, 'キャリブに失敗しました（サンプル0件）');
+          }
+        }
+
+        // キャリブ中は判定・ログはスキップ
+        if (calibMode) {
+          output.textContent =
+            `キャリブレーション中...\n` +
+            `yDiff(平滑): ${sYdiff.toFixed(4)}\n` +
+            `noseZ(平滑): ${sNoseZ.toFixed(4)}`;
+          return;
+        }
+      }
+
+      // ★ ここが今回のポイント：
+      // キャリブ未実行＆保存基準なしのとき、最初の数フレームを自動基準として平均
+      if (!autoBaseDone && !calibMode && PARAMS.calibYdiff == null && PARAMS.calibNoseZ == null) {
+        autoBaseY = (autoBaseY === null) ? sYdiff : autoBaseY + sYdiff;
+        autoBaseZ = (autoBaseZ === null) ? sNoseZ : autoBaseZ + sNoseZ;
+        autoBaseCount++;
+        if (autoBaseCount >= 10) { // 約1秒分
+          PARAMS.calibYdiff = autoBaseY / autoBaseCount;
+          PARAMS.calibNoseZ = autoBaseZ / autoBaseCount;
+          autoBaseDone = true;
+          // console.log('Auto base set', PARAMS.calibYdiff, PARAMS.calibNoseZ);
+        }
+      }
+
+      // 顔向き & 距離の分類
+      const dir = classifyDirection();     // ← combined 判定
+      faceState.dir = dir;
+      const prox = classifyProximity(sNoseZ);
+      faceState.prox = prox;
+
+      // スマホ角度も考慮した首曲がり最終判定
+      const pitchAbs = Math.abs(sPitch);
+      const isBentNow = isBent(faceState.dir, faceState.prox, pitchAbs);
+      updateSustain(isBentNow);
+
+      // デバッグ出力
+      const combined = getCombinedForDebug();
+      output.textContent =
+        `Pitch: ${sPitch.toFixed(2)}°\n` +
+        `Roll:  ${sRoll.toFixed(2)}°\n` +
+        `yDiff(平滑): ${sYdiff.toFixed(4)}\n` +
+        `noseZ(平滑): ${sNoseZ.toFixed(4)}\n` +
+        `combined(y+z): ${combined.toFixed(4)}\n` +
+        `顔向き: ${faceState.dir}\n` +
+        `顔距離: ${faceState.prox}`;
+
+      // ログ記録（1秒粒度）
+      addLogSample();
+    });
+
+    function drawPoint(normLandmark, color) {
+      const x = normLandmark.x * canvas.width;
+      const y = normLandmark.y * canvas.height;
+      ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+    }
+
+    // combined(y+z) を返す（キャリブ有無に対応）
+    function getCombinedForDebug(){
+      if (PARAMS.calibYdiff != null && PARAMS.calibNoseZ != null){
+        return (sYdiff - PARAMS.calibYdiff) + (sNoseZ - PARAMS.calibNoseZ);
+      }
+      return (sYdiff ?? 0) + (sNoseZ ?? 0);
+    }
+
+    // 顔向き：yDiff + noseZ で判定（ヒステリシス）
+    function classifyDirection() {
+      const band = PARAMS.absExitBand ?? 0.02;
+      let combined;
+
+      if (PARAMS.calibYdiff != null && PARAMS.calibNoseZ != null){
+        combined = (sYdiff - PARAMS.calibYdiff) + (sNoseZ - PARAMS.calibNoseZ);
+      } else {
+        combined = (sYdiff ?? 0) + (sNoseZ ?? 0);
+      }
+
+      if (!wasDown && combined < -0.04) { wasDown = true; wasUp = false; return 'down'; }
+      if (wasDown && combined > -0.04 + band) { wasDown = false; }
+
+      if (!wasUp && combined > 0.05) { wasUp = true; wasDown = false; return 'up'; }
+      if (wasUp && combined < 0.05 - band) { wasUp = false; }
+
+      if (wasDown) return 'down';
+      if (wasUp)   return 'up';
+      return 'straight';
+    }
+
+    function classifyProximity(z) {
+      if (PARAMS.calibNoseZ != null) {
+        const dz = z - PARAMS.calibNoseZ;
+        if (!wasClose && dz <= PARAMS.closeEnter) { wasClose = true; wasFar = false; return '顔が近い'; }
+        if (wasClose && dz >= PARAMS.closeExit)   { wasClose = false; }
+        if (!wasFar && dz >= PARAMS.farEnter)     { wasFar = true; wasClose = false; return '顔が遠い'; }
+        if (wasFar && dz <= PARAMS.farExit)       { wasFar = false; }
+        if (wasClose) return '顔が近い';
+        if (wasFar)   return '顔が遠い';
+        return '通常距離';
+      } else {
+        const close = PARAMS.absCloseEnter, far = PARAMS.absFarEnter, band = PARAMS.absZExitBand;
+        if (!wasClose && z < close) { wasClose = true; wasFar = false; return '顔が近い'; }
+        if (wasClose && z > close + band) { wasClose = false; }
+        if (!wasFar && z > far) { wasFar = true; wasClose = false; }
+        if (wasFar && z < far - band) { wasFar = false; }
+        if (wasClose) return '顔が近い';
+        if (wasFar)   return '顔が遠い';
+        return '通常距離';
+      }
+    }
+
+    // 最終判定（端末角度も考慮）
+    function isBent(dir, prox, pitchAbs){
+      if (prox === '顔が近い' && pitchAbs <= 30) return true;
+      if (pitchAbs <= 40) return (dir === 'down' || dir === 'straight');
+      return (dir === 'down');
+    }
+
+    // キャリブ中は判定しない・ビープ止める
+    function updateSustain(isNow){
+      if (calibMode) {
+        bentState = false;
+        enterStart = exitStart = null;
+        stopBeepLoop();
+        setWarning(false, 'キャリブレーション中: 良い姿勢で3秒間静止してください');
+        return;
+      }
+
+      const t = performance.now();
+      if (isNow) {
+        if (enterStart == null) enterStart = t;
+        exitStart = null;
+        const elapsed = t - enterStart;
+        if (!bentState && elapsed >= PARAMS.sustainMs) {
+          bentState = true;
+          setWarning(true, '首が曲がっています');
+          startBeepLoop();
+        }
+      } else {
+        if (exitStart == null) exitStart = t;
+        enterStart = null;
+        const elapsed = t - exitStart;
+        if (bentState && elapsed >= PARAMS.clearMs) {
+          bentState = false;
+          setWarning(false, '首は曲がっていません');
+          stopBeepLoop();
+        }
+      }
+
+      if (faceDetected) {
+        setWarning(bentState, bentState ? '首が曲がっています' : '首は曲がっていません');
+      }
+    }
+
+    function refreshWarningNow(){
+      if (!faceDetected) return;
+      setWarning(bentState, bentState ? '首が曲がっています' : '首は曲がっていません');
+    }
+
+    function setWarning(bad, text){
+      if (text === lastWarnText && bad === lastWarnBad) return;
+      lastWarnText = text; lastWarnBad = bad;
+      warning.textContent = text;
+      warning.className = bad ? 'bad' : 'ok';
+    }
+
+    async function initCamera(){
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: {ideal: 640}, height: {ideal: 480} },
+        audio: false
+      });
+      video.srcObject = stream;
+      await new Promise(r => video.onloadedmetadata = r);
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    }
+
+    async function startAll(){
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+        try {
+          const res = await DeviceOrientationEvent.requestPermission();
+          if (res === 'granted') window.addEventListener('deviceorientation', handleOrientation);
+          else { output.textContent = 'センサーの利用が許可されませんでした。'; return; }
+        } catch { output.textContent = 'センサー許可でエラーが発生しました。'; return; }
+      } else {
+        window.addEventListener('deviceorientation', handleOrientation);
+      }
+
+      await initCamera();
+
+      // 状態リセット
+      wasDown = wasUp = wasClose = wasFar = false;
+      bentState = false;
+      enterStart = exitStart = null;
+      stopBeepLoop();
+
+      // 自動基準リセット
+      autoBaseY = autoBaseZ = null;
+      autoBaseCount = 0;
+      autoBaseDone = false;
+
+      // キャリブ状態リセット
+      calibMode = false;
+      calibSamples = [];
+      calibStartTs = 0;
+
+      ensureAudio();
+
+      camera = new Camera(video, {
+        onFrame: async () => {
+          const t = performance.now();
+          if (t - lastInferenceTs >= 100) {
+            await faceMesh.send({ image: video });
+          }
+        },
+        width: 640, height: 480
+      });
+      camera.start();
+
+      startBtn.disabled = true; calibBtn.disabled = false; resetBtn.disabled = false;
+
+      const saved = loadCalibration();
+      if (saved) {
+        PARAMS.calibYdiff = saved.y;
+        PARAMS.calibNoseZ = saved.z;
+        autoBaseDone = true; // 保存基準があるなら自動基準は使わない
+        setWarning(false, '測定中...');
+      } else {
+        PARAMS.calibYdiff = null;
+        PARAMS.calibNoseZ = null;
+        setWarning(false, '測定中...');
+      }
+
+      document.addEventListener('visibilitychange', () => {
+        if (!camera) return;
+        if (document.hidden) {
+          try { camera.stop(); } catch {}
+          stopBeepLoop();
+        } else {
+          try { camera.start(); } catch {}
+        }
+      }, { passive: true });
+    }
+
+    // 3秒平均キャリブ
+    function calibrate(){
+      if (sYdiff == null || sNoseZ == null) {
+        setWarning(true, 'まだ値が安定していません。数秒待ってからもう一度試してください');
+        return;
+      }
+      calibMode = true;
+      calibSamples = [];
+      calibStartTs = performance.now();
+      setWarning(false, '良い姿勢で3秒間そのまま静止してください');
+    }
+
+    function resetCalibration(){
+      PARAMS.calibYdiff = null; PARAMS.calibNoseZ = null;
+      calibMode = false;
+      calibSamples = [];
+      calibStartTs = 0;
+      localStorage.removeItem('posture-calib');
+
+      // 自動基準もリセット（解除後はまた開始直後の姿勢を基準に）
+      autoBaseY = autoBaseZ = null;
+      autoBaseCount = 0;
+      autoBaseDone = false;
+
+      setWarning(false, 'キャリブを解除しました');
+    }
+
+    function saveCalibration(y, z){ try { localStorage.setItem('posture-calib', JSON.stringify({ y, z })); } catch {} }
+    function loadCalibration(){ try { return JSON.parse(localStorage.getItem('posture-calib')); } catch { return null; } }
+
+    // ============================== ログ保存（IndexedDB） ==============================
+    const DB_NAME = 'posture-db';
+    const STORE = 'logs';
+    let db = null;
+
+    function openDB(){
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = (e) => {
+          const _db = e.target.result;
+          if (!_db.objectStoreNames.contains(STORE)) {
+            const os = _db.createObjectStore(STORE, { keyPath: 'ts' });
+            os.createIndex('day', 'day', { unique: false });
+            os.createIndex('day_hour', ['day','hour'], { unique: false });
+          }
+        };
+        req.onsuccess = () => { db = req.result; resolve(db); };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    function ymdFromTs(ts){
+      const d = new Date(ts);
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      return `${y}-${m}-${day}`;
+    }
+
+    // JST(+09:00) の ISO風文字列（ミリ秒付き）
+    function toJstIso(ts){
+      const d = new Date(ts);
+      const parts = Object.fromEntries(
+        new Intl.DateTimeFormat('sv-SE', {
+          timeZone: 'Asia/Tokyo',
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit',
+          hour12: false
+        }).formatToParts(d).map(p => [p.type, p.value])
+      );
+      const ms = String(d.getMilliseconds()).padStart(3,'0');
+      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${ms}+09:00`;
+    }
+
+    let LOGGING = false;
+    let logBuffer = [];
+    let lastFlush = 0;
+    const LOG_INTERVAL_MS = 1000;
+    const FLUSH_MS = 5000;
+    let lastLogAt = 0;
+
+    async function addLogSample(){
+      if (!LOGGING) return;
+      const now = performance.now();
+      if (now - lastLogAt < LOG_INTERVAL_MS) return;
+      lastLogAt = now;
+
+      const ts = Date.now();
+      const d = new Date(ts);
+      const entry = {
+        ts,
+        day: ymdFromTs(ts),
+        hour: d.getHours(),
+        pitch: sPitch, roll: sRoll,
+        y: sYdiff, z: sNoseZ,
+        dir: faceState.dir,
+        prox: faceState.prox,
+        bent: !!bentState
+      };
+      logBuffer.push(entry);
+
+      if (ts - lastFlush >= FLUSH_MS) {
+        await flushLogs();
+      }
+    }
+
+    async function flushLogs(){
+      if (!db || logBuffer.length === 0) return;
+      const tx = db.transaction(STORE, 'readwrite');
+      const store = tx.objectStore(STORE);
+      for (const e of logBuffer) store.put(e);
+      await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+      logBuffer = [];
+      lastFlush = Date.now();
+    }
+
+    async function exportCSV(){
+      await flushLogs();
+      if (!db) await openDB();
+
+      const tx = db.transaction(STORE, 'readonly');
+      const store = tx.objectStore(STORE);
+      const rows = [['ts','iso','day','hour','pitch','roll','y','z','dir','prox','bent']];
+      const req = store.openCursor();
+      await new Promise((resolve, reject) => {
+        req.onsuccess = (e) => {
+          const cur = e.target.result;
+          if (!cur) return resolve();
+          const v = cur.value;
+          rows.push([
+            v.ts,
+            toJstIso(v.ts),
+            v.day,
+            v.hour,
+            v.pitch?.toFixed?.(3),
+            v.roll?.toFixed?.(3),
+            v.y?.toFixed?.(5),
+            v.z?.toFixed?.(5),
+            v.dir,
+            v.prox,
+            v.bent ? 1 : 0
+          ]);
+          cur.continue();
+        };
+        req.onerror = () => reject(req.error);
+      });
+
+      const csv = rows.map(r => r.join(',')).join('\n');
+      const blob = new Blob([csv], {type:'text/csv'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+      a.href = url; a.download = `posture_logs_${stamp}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function clearAllLogs(){
+      if (!db) await openDB();
+      await flushLogs();
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).clear();
+      await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+      setWarning(false, 'ログを全削除しました');
+    }
+
+    // ========== YouTube URL 解析 ==========
+    function parseYouTube(urlStr) {
+      try {
+        const u = new URL(urlStr);
+        const host = u.hostname.replace(/^www\./, '');
+        let id = null;
+        if (host === 'youtube.com' || host === 'm.youtube.com') {
+          if (u.pathname === '/watch') id = u.searchParams.get('v');
+          else if (u.pathname.startsWith('/shorts/')) id = u.pathname.split('/')[2];
+          else if (u.pathname.startsWith('/live/'))   id = u.pathname.split('/')[2];
+        } else if (host === 'youtu.be') {
+          id = u.pathname.slice(1);
+        }
+        return id;
+      } catch {
+        return null;
+      }
+    }
+
+    // ========== UI配線 ==========
+    window.addEventListener('load', async () => {
+      await openDB();
+
+      startBtn.addEventListener('click', startAll);
+      calibBtn.addEventListener('click', calibrate);
+      resetBtn.addEventListener('click', resetCalibration);
+
+      const logStartBtn  = document.getElementById('logStartBtn');
+      const logStopBtn   = document.getElementById('logStopBtn');
+      const exportCsvBtn = document.getElementById('exportCsvBtn');
+      const clearLogBtn  = document.getElementById('clearLogBtn');
+
+      if (logStartBtn) logStartBtn.addEventListener('click', async ()=>{
+        LOGGING = true; lastLogAt = 0; lastFlush = 0;
+        output.textContent += '\n[LOG] ログ記録を開始しました';
+        logStartBtn.disabled = true; logStopBtn.disabled  = false;
+      });
+
+      if (logStopBtn) logStopBtn.addEventListener('click', async ()=>{
+        LOGGING = false; await flushLogs();
+        output.textContent += '\n[LOG] ログ記録を停止しました';
+        logStartBtn.disabled = false; logStopBtn.disabled  = true;
+      });
+
+      if (exportCsvBtn) exportCsvBtn.addEventListener('click', exportCSV);
+      if (clearLogBtn)  clearLogBtn.addEventListener('click', clearAllLogs);
+
+      // YouTube プレイヤー
+      const ytUrl = document.getElementById('ytUrl');
+      const loadYtBtn = document.getElementById('loadYtBtn');
+      const ytPlayer = document.getElementById('ytPlayer');
+
+      if (loadYtBtn && ytUrl && ytPlayer) {
+        loadYtBtn.addEventListener('click', () => {
+          const id = parseYouTube(ytUrl.value.trim());
+          if (!id) {
+            alert("URLを正しく認識できませんでした");
+            return;
+          }
+          ytPlayer.src = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0`;
+        });
+      }
+    });
+  </script>
+</body>
+</html>
