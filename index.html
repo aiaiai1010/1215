@@ -159,8 +159,7 @@
         ✓ 個人差に対応した適応的閾値<br>
         ✓ 複合スコアによる総合判定<br>
         ✓ ヒステリシス機能で誤判定防止<br>
-        ✓ 信頼度ベースの警告制御<br>
-        ✓ <strong>端末の傾きを考慮した補正（NEW!）</strong>
+        ✓ 信頼度ベースの警告制御
       </p>
 
       <div class="controls" style="margin-top:6px">
@@ -443,12 +442,12 @@
 
       // デバッグ出力
       output.textContent =
-        `Pitch: ${pitch.toFixed(2)}° (Δ${(pitch - (baselinePitch || 0)).toFixed(1)}°)\n` +
-        `yDiff: ${smoothYdiff?.toFixed(4) || 'N/A'} (補正考慮済)\n` +
+        `Pitch: ${pitch.toFixed(2)}°\n` +
+        `yDiff: ${smoothYdiff?.toFixed(4) || 'N/A'}\n` +
         `noseZ: ${smoothNoseZ?.toFixed(4) || 'N/A'}\n` +
         `姿勢スコア: ${(postureScore * 100).toFixed(1)}%\n` +
         `基準値: ${baselineYdiff ? '設定済み' : '未設定'}\n` +
-        `使い方: 端末の角度を変えても正しく判定`;
+        `適応範囲: Y±${adaptiveThresholds.yDiffRange.toFixed(3)}`;
 
       addLogSample();
     });
